@@ -117,6 +117,7 @@ def process_video(video_path, model_path, conf_threshold, img_size):
     col1, col2 = st.columns([2, 1])
     with col1:
         image_spot = st.empty()
+        alert_spot = st.empty() # <--- 1. ALERT PLACEHOLDER
     with col2:
         chart_spot_lat = st.empty()
         chart_spot_obj = st.empty()
@@ -131,19 +132,16 @@ def process_video(video_path, model_path, conf_threshold, img_size):
             break
             
         frame_id += 1
-        if frame_id % 3 != 0: continue # Skip frames for speed
+        if frame_id % 3 != 0: continue 
 
-        # Run shared processing logic with 640
-        results, counts = process_frame(frame, model, conf_threshold, 640)
+        results, counts = process_frame(frame, model, conf_threshold, img_size)
         objects_detected = sum(counts.values())
 
-        # Stats
         end_time = time.time()
         inference_time = end_time - start_time
         fps = 1 / inference_time if inference_time > 0 else 0
         latency_ms = inference_time * 1000
 
-        # Update Data
         data_buffer.append({
             "Frame": frame_id,
             "FPS": round(fps, 1),
@@ -154,29 +152,31 @@ def process_video(video_path, model_path, conf_threshold, img_size):
         if len(data_buffer) > 50: data_buffer.pop(0)
         df = pd.DataFrame(data_buffer)
 
-        # UI Updates
         kpi1.metric("System Health", "ONLINE")
         kpi2.metric("Inference Speed", f"{fps:.1f} FPS")
         kpi3.metric("Latency", f"{latency_ms:.1f} ms")
         kpi4.metric("Objects Detected", f"{objects_detected}")
 
-        # Draw HUD on frame
+        # --- 2. ALERTS LOGIC ---
+        if fps < 10:
+            alert_spot.error(f"🔴 CRITICAL: Latency High! ({latency_ms:.0f}ms)")
+        elif fps < 20:
+            alert_spot.warning(f"🟡 WARNING: High Traffic Load")
+        else:
+            alert_spot.success("🟢 SYSTEM NORMAL")
+
         annotated_frame = results[0].plot()
         annotated_frame = draw_hud(annotated_frame, fps, latency_ms, counts)
-        
         annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-        # FIXED: Replaced 'use_container_width=True' with 'width="stretch"'
         image_spot.image(annotated_frame, caption=f"Real-Time Inference (Frame {frame_id})", width="stretch")
 
         if not df.empty:
             fig_lat = px.line(df, x="Frame", y="Latency_ms", title="Latency Stability", height=250)
             fig_lat.update_layout(margin=dict(l=20, r=20, t=30, b=20))
-            # FIXED: Replaced 'use_container_width=True' with 'width="stretch"'
             chart_spot_lat.plotly_chart(fig_lat, width="stretch", key=f"lat_{frame_id}")
 
             fig_obj = px.bar(df, x="Frame", y="Objects", title="Object Density", height=250)
             fig_obj.update_layout(margin=dict(l=20, r=20, t=30, b=20))
-            # FIXED: Replaced 'use_container_width=True' with 'width="stretch"'
             chart_spot_obj.plotly_chart(fig_obj, width="stretch", key=f"obj_{frame_id}")
 
     cap.release()
