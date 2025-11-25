@@ -165,16 +165,19 @@ def process_video(video_path, model_path, conf_threshold, img_size):
         annotated_frame = draw_hud(annotated_frame, fps, latency_ms, counts)
         
         annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-        image_spot.image(annotated_frame, caption=f"Real-Time Inference (Frame {frame_id})", use_container_width=True)
+        # FIXED: Replaced 'use_container_width=True' with 'width="stretch"'
+        image_spot.image(annotated_frame, caption=f"Real-Time Inference (Frame {frame_id})", width="stretch")
 
         if not df.empty:
             fig_lat = px.line(df, x="Frame", y="Latency_ms", title="Latency Stability", height=250)
             fig_lat.update_layout(margin=dict(l=20, r=20, t=30, b=20))
-            chart_spot_lat.plotly_chart(fig_lat, use_container_width=True, key=f"lat_{frame_id}")
+            # FIXED: Replaced 'use_container_width=True' with 'width="stretch"'
+            chart_spot_lat.plotly_chart(fig_lat, width="stretch", key=f"lat_{frame_id}")
 
             fig_obj = px.bar(df, x="Frame", y="Objects", title="Object Density", height=250)
             fig_obj.update_layout(margin=dict(l=20, r=20, t=30, b=20))
-            chart_spot_obj.plotly_chart(fig_obj, use_container_width=True, key=f"obj_{frame_id}")
+            # FIXED: Replaced 'use_container_width=True' with 'width="stretch"'
+            chart_spot_obj.plotly_chart(fig_obj, width="stretch", key=f"obj_{frame_id}")
 
     cap.release()
 
@@ -228,7 +231,8 @@ elif source_type == "Snapshot (Legacy)":
                     
                     # Convert to RGB for display
                     annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-                    st.image(annotated_frame, caption="Processed Snapshot", use_container_width=True)
+                    # FIXED: Replaced 'use_container_width=True' with 'width="stretch"'
+                    st.image(annotated_frame, caption="Processed Snapshot", width="stretch")
                     st.success("Processing Complete!")
                     
             except Exception as e:
