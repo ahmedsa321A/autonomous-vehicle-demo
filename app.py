@@ -34,7 +34,7 @@ def load_model(model_path):
 def process_frame(frame, model, conf_threshold, img_size):
     """Run inference and return results + object counts"""
     # 1. Inference
-    results = model(frame, imgsz=img_size, conf=conf_threshold, device='cpu', verbose=False)
+    results = model(frame, conf=conf_threshold, device='cpu', verbose=False)
     
     # 2. Filter & Count
     final_boxes = []
