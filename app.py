@@ -34,7 +34,7 @@ def load_model(model_path):
 def process_frame(frame, model, conf_threshold, img_size):
     """Run inference on a single frame (Shared by Video and Camera)"""
     # 1. Inference
-    results = model(frame, conf=0.1, device='cpu', verbose=False)
+    results = model(frame, conf=conf_threshold, device='cpu', verbose=False)
     
     # 2. Filter
     final_boxes = []
@@ -75,13 +75,15 @@ class YOLOVideoProcessor:
             latency_ms = inference_time * 1000
             self.last_time = end_time
 
-            # --- DRAW STATS ON FRAME ---
-            stats_text = f"FPS: {fps:.1f} | Latency: {latency_ms:.1f}ms | Objects: {obj_count}"
-            # Draw black background for text
-            cv2.rectangle(annotated_frame, (5, 5), (600, 40), (0, 0, 0), -1)
-            # Draw green text
+            # --- DRAW STATS ON FRAME (HUD) ---
+            # This burns the numbers into the video so you can see them on phone/browser
+            stats_text = f"FPS: {fps:.1f} | Latency: {latency_ms:.1f}ms | Objs: {obj_count}"
+            
+            # Black background for text readability
+            cv2.rectangle(annotated_frame, (0, 0), (550, 40), (0, 0, 0), -1)
+            # Green Text
             cv2.putText(annotated_frame, stats_text, (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
             # Return back to browser
             return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
@@ -166,6 +168,9 @@ if not os.path.exists(model_file):
     st.error(f"Model file '{model_file}' not found! Please upload it to your GitHub repo.")
     st.stop()
 
+# --- CONFIDENCE SLIDER ---
+conf_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.50, 0.05)
+
 # 1. Source Selection
 source_type = st.sidebar.radio("Select Input Source", ["Sample Video", "Upload Video", "Live Stream (WebRTC)", "Snapshot (Legacy)"])
 
@@ -194,14 +199,14 @@ elif source_type == "Snapshot (Legacy)":
         file_bytes = np.asarray(bytearray(camera_image.read()), dtype=np.uint8)
         frame = cv2.imdecode(file_bytes, 1)
         model = load_model(model_file)
-        results, objects_detected = process_frame(frame, model, 0.5, 320)
+        results, objects_detected = process_frame(frame, model, conf_threshold, 320)
         st.image(results[0].plot(), caption="Processed Snapshot", channels="BGR", use_container_width=True)
 
 elif source_type == "Sample Video":
     video_file = "Relaxing Night Drive in Tokyo _ 8K 60fps HDR _ Soft Lofi Beats - Abao Vision (1080p, h264).mp4"
     if st.sidebar.button("🚀 Start Sample"):
         if os.path.exists(video_file):
-            process_video(video_file, model_file, 0.5, 320)
+            process_video(video_file, model_file, conf_threshold, 320)
         else:
             st.warning("Sample video not found.")
 
@@ -210,4 +215,4 @@ else: # Upload Video
     if uploaded_file and st.sidebar.button("🚀 Start Processing"):
         tfile = tempfile.NamedTemporaryFile(delete=False)
         tfile.write(uploaded_file.read())
-        process_video(tfile.name, model_file, 0.5, 320)
+        process_video(tfile.name, model_file, conf_threshold, 320)
