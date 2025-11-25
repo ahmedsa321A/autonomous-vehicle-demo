@@ -6,3 +6,5 @@ plotly
 ultralytics
 onnx
 onnxruntime
+streamlit-webrtc
+av

@@ -6,7 +6,9 @@ import plotly.express as px
 from ultralytics import YOLO
 import tempfile
 import os
-import numpy as np  # <--- NEW: Needed for camera image conversion
+import numpy as np
+import av  # <--- NEW: Video processing library
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration # <--- NEW: WebRTC
 
 # ================= CONFIGURATION =================
 st.set_page_config(
@@ -46,6 +48,23 @@ def process_frame(frame, model, conf_threshold, img_size):
         results[0].boxes = final_boxes
     
     return results, len(final_boxes)
+
+# --- WEBRTC CALLBACK FOR REAL-TIME VIDEO ---
+def video_frame_callback(frame):
+    # This function runs for EVERY video frame
+    img = frame.to_ndarray(format="bgr24")
+    
+    # Load model (cached)
+    model = load_model("best.onnx")
+    
+    # Process
+    results, _ = process_frame(img, model, 0.5, 320)
+    
+    # Draw
+    annotated_frame = results[0].plot()
+    
+    # Return back to browser
+    return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
 
 def process_video(video_path, model_path, conf_threshold, img_size):
     model = load_model(model_path)
@@ -124,40 +143,35 @@ if not os.path.exists(model_file):
     st.stop()
 
 # 1. Source Selection
-source_type = st.sidebar.radio("Select Input Source", ["Sample Video", "Upload Video", "Live Camera (Phone/Webcam)"])
+source_type = st.sidebar.radio("Select Input Source", ["Sample Video", "Upload Video", "Live Stream (WebRTC)", "Snapshot (Legacy)"])
 
-if source_type == "Live Camera (Phone/Webcam)":
-    st.markdown("### 📸 Phone Camera Test Mode")
-    st.info("Use your phone to take a snapshot of the road or traffic.")
+if source_type == "Live Stream (WebRTC)":
+    st.markdown("### 📡 Real-Time Camera Stream")
+    st.info("Click 'Start' and allow camera access. Works on Mobile & Desktop.")
     
-    # Streamlit Camera Input (Works on Cloud)
+    # WebRTC Configuration (Google STUN server ensures it works on mobile networks)
+    rtc_configuration = RTCConfiguration(
+        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    )
+    
+    webrtc_streamer(
+        key="yolo-stream",
+        mode=WebRtcMode.SENDRECV,
+        rtc_configuration=rtc_configuration,
+        video_frame_callback=video_frame_callback,
+        media_stream_constraints={"video": True, "audio": False},
+        async_processing=True,
+    )
+
+elif source_type == "Snapshot (Legacy)":
+    st.markdown("### 📸 Phone Camera Snapshot")
     camera_image = st.camera_input("Tap to Capture")
-    
     if camera_image:
-        # Convert uploaded image to OpenCV format
         file_bytes = np.asarray(bytearray(camera_image.read()), dtype=np.uint8)
         frame = cv2.imdecode(file_bytes, 1)
-        
-        # Load Model
         model = load_model(model_file)
-        
-        # Run Inference
-        start_time = time.time()
         results, objects_detected = process_frame(frame, model, 0.5, 320)
-        end_time = time.time()
-        
-        # Show Results
-        latency_ms = (end_time - start_time) * 1000
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Latency", f"{latency_ms:.1f} ms")
-        with col2:
-            st.metric("Objects Detected", f"{objects_detected}")
-            
-        annotated_frame = results[0].plot()
-        annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-        st.image(annotated_frame, caption="Processed Snapshot", use_container_width=True)
+        st.image(results[0].plot(), caption="Processed Snapshot", channels="BGR", use_container_width=True)
 
 elif source_type == "Sample Video":
     video_file = "Relaxing Night Drive in Tokyo _ 8K 60fps HDR _ Soft Lofi Beats - Abao Vision (1080p, h264).mp4"
