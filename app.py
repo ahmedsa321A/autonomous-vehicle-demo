@@ -34,7 +34,7 @@ def load_model(model_path):
 def process_frame(frame, model, conf_threshold, img_size):
     """Run inference on a single frame (Shared by Video and Camera)"""
     # 1. Inference
-    results = model(frame, imgsz=img_size, conf=0.1, device='cpu', verbose=False)
+    results = model(frame, conf=0.1, device='cpu', verbose=False)
     
     # 2. Filter
     final_boxes = []
