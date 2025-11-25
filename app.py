@@ -31,10 +31,11 @@ def load_model(model_path):
     """Load model once and cache it to save memory"""
     return YOLO(model_path, task='detect')
 
-def process_frame(frame, model, conf_threshold, img_size):
+def process_frame(frame, model, conf_threshold, img_size=640):
     """Run inference and return results + object counts"""
     # 1. Inference
-    results = model(frame, conf=conf_threshold, device='cpu', verbose=False)
+    # FIXED: Forced to 640 to match your specific ONNX model export settings
+    results = model(frame, imgsz=640, conf=conf_threshold, device='cpu', verbose=False)
     
     # 2. Filter & Count
     final_boxes = []
@@ -83,9 +84,13 @@ class YOLOVideoProcessor:
             start_time = time.time()
             img = frame.to_ndarray(format="bgr24")
             
-            results, counts = process_frame(img, self.model, 0.5, 320)
+            # Process with 640
+            results, counts = process_frame(img, self.model, 0.5, 640)
+            
+            # Draw
             annotated_frame = results[0].plot()
             
+            # --- CALCULATE STATS ---
             end_time = time.time()
             inference_time = end_time - start_time
             total_time = end_time - self.last_time
@@ -93,7 +98,10 @@ class YOLOVideoProcessor:
             latency_ms = inference_time * 1000
             self.last_time = end_time
 
+            # --- DRAW HUD ---
             annotated_frame = draw_hud(annotated_frame, fps, latency_ms, counts)
+
+            # Return back to browser
             return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
         except Exception as e:
             print(f"Error processing frame: {e}")
@@ -119,19 +127,23 @@ def process_video(video_path, model_path, conf_threshold, img_size):
     while cap.isOpened():
         start_time = time.time()
         ret, frame = cap.read()
-        if not ret: break
+        if not ret:
+            break
             
         frame_id += 1
-        if frame_id % 3 != 0: continue 
+        if frame_id % 3 != 0: continue # Skip frames for speed
 
-        results, counts = process_frame(frame, model, conf_threshold, img_size)
+        # Run shared processing logic with 640
+        results, counts = process_frame(frame, model, conf_threshold, 640)
         objects_detected = sum(counts.values())
 
+        # Stats
         end_time = time.time()
         inference_time = end_time - start_time
         fps = 1 / inference_time if inference_time > 0 else 0
         latency_ms = inference_time * 1000
 
+        # Update Data
         data_buffer.append({
             "Frame": frame_id,
             "FPS": round(fps, 1),
@@ -142,13 +154,16 @@ def process_video(video_path, model_path, conf_threshold, img_size):
         if len(data_buffer) > 50: data_buffer.pop(0)
         df = pd.DataFrame(data_buffer)
 
+        # UI Updates
         kpi1.metric("System Health", "ONLINE")
         kpi2.metric("Inference Speed", f"{fps:.1f} FPS")
         kpi3.metric("Latency", f"{latency_ms:.1f} ms")
         kpi4.metric("Objects Detected", f"{objects_detected}")
 
+        # Draw HUD on frame
         annotated_frame = results[0].plot()
         annotated_frame = draw_hud(annotated_frame, fps, latency_ms, counts)
+        
         annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
         image_spot.image(annotated_frame, caption=f"Real-Time Inference (Frame {frame_id})", use_container_width=True)
 
@@ -202,7 +217,8 @@ elif source_type == "Snapshot (Legacy)":
                 else:
                     model = load_model(model_file)
                     start_time = time.time()
-                    results, counts = process_frame(frame, model, conf_threshold, 320)
+                    # Process with 640
+                    results, counts = process_frame(frame, model, conf_threshold, 640)
                     end_time = time.time()
                     
                     latency_ms = (end_time - start_time) * 1000
@@ -222,6 +238,7 @@ elif source_type == "Sample Video":
     video_file = "Relaxing Night Drive in Tokyo _ 8K 60fps HDR _ Soft Lofi Beats - Abao Vision (1080p, h264).mp4"
     if st.sidebar.button("🚀 Start Sample"):
         if os.path.exists(video_file):
+            # Process with 640
             process_video(video_file, model_file, conf_threshold, 640)
         else:
             st.warning("Sample video not found.")
@@ -231,4 +248,5 @@ else: # Upload Video
     if uploaded_file and st.sidebar.button("🚀 Start Processing"):
         tfile = tempfile.NamedTemporaryFile(delete=False)
         tfile.write(uploaded_file.read())
+        # Process with 640
         process_video(tfile.name, model_file, conf_threshold, 640)
