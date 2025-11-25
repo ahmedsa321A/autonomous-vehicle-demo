@@ -222,7 +222,7 @@ elif source_type == "Sample Video":
     video_file = "Relaxing Night Drive in Tokyo _ 8K 60fps HDR _ Soft Lofi Beats - Abao Vision (1080p, h264).mp4"
     if st.sidebar.button("🚀 Start Sample"):
         if os.path.exists(video_file):
-            process_video(video_file, model_file, conf_threshold, 320)
+            process_video(video_file, model_file, conf_threshold, 640)
         else:
             st.warning("Sample video not found.")
 
@@ -231,4 +231,4 @@ else: # Upload Video
     if uploaded_file and st.sidebar.button("🚀 Start Processing"):
         tfile = tempfile.NamedTemporaryFile(delete=False)
         tfile.write(uploaded_file.read())
-        process_video(tfile.name, model_file, conf_threshold, 320)
+        process_video(tfile.name, model_file, conf_threshold, 640)
