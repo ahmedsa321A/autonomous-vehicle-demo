@@ -28,16 +28,14 @@ DEFAULT_CONF = 0.50
 # ================= HELPER FUNCTIONS =================
 @st.cache_resource
 def load_model(model_path):
-    """Load model once and cache it to save memory"""
     return YOLO(model_path, task='detect')
 
 def process_frame(frame, model, conf_threshold, img_size=640):
-    """Run inference and return results + object counts"""
-    # 1. Inference
-    # FIXED: Forced to 640 to match your specific ONNX model export settings
-    results = model(frame, imgsz=640, conf=conf_threshold, device='cpu', verbose=False)
+    try:
+        results = model(frame, imgsz=img_size, conf=conf_threshold, device='cpu', verbose=False)
+    except Exception:
+        results = model(frame, imgsz=640, conf=conf_threshold, device='cpu', verbose=False)
     
-    # 2. Filter & Count
     final_boxes = []
     counts = {}
     
@@ -49,7 +47,6 @@ def process_frame(frame, model, conf_threshold, img_size=640):
             
             if conf >= threshold:
                 final_boxes.append(box)
-                # Add to counts
                 class_name = model.names[cls_id]
                 counts[class_name] = counts.get(class_name, 0) + 1
                 
@@ -58,22 +55,18 @@ def process_frame(frame, model, conf_threshold, img_size=640):
     return results, counts
 
 def draw_hud(frame, fps, latency_ms, counts):
-    """Draw stats and class breakdown on the frame"""
     total_obj = sum(counts.values())
-    
     stats_text = f"FPS: {fps:.1f} | Latency: {latency_ms:.1f}ms | Total: {total_obj}"
     breakdown_text = " | ".join([f"{k}: {v}" for k, v in counts.items()])
     
     h_bg = 70 if breakdown_text else 40
     cv2.rectangle(frame, (0, 0), (650, h_bg), (0, 0, 0), -1)
-    
     cv2.putText(frame, stats_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
     if breakdown_text:
         cv2.putText(frame, breakdown_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        
     return frame
 
-# --- VIDEO PROCESSOR CLASS (Fixes Threading Issues) ---
+# --- VIDEO PROCESSOR CLASS ---
 class YOLOVideoProcessor:
     def __init__(self):
         self.model = load_model("best.onnx")
@@ -83,28 +76,19 @@ class YOLOVideoProcessor:
         try:
             start_time = time.time()
             img = frame.to_ndarray(format="bgr24")
-            
-            # Process with 640
             results, counts = process_frame(img, self.model, 0.5, 640)
-            
-            # Draw
             annotated_frame = results[0].plot()
             
-            # --- CALCULATE STATS ---
             end_time = time.time()
-            inference_time = end_time - start_time
             total_time = end_time - self.last_time
             fps = 1 / total_time if total_time > 0 else 0
-            latency_ms = inference_time * 1000
+            latency_ms = (end_time - start_time) * 1000
             self.last_time = end_time
 
-            # --- DRAW HUD ---
             annotated_frame = draw_hud(annotated_frame, fps, latency_ms, counts)
-
-            # Return back to browser
             return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
         except Exception as e:
-            print(f"Error processing frame: {e}")
+            print(f"Error: {e}")
             return frame
 
 def process_video(video_path, model_path, conf_threshold, img_size):
@@ -112,12 +96,21 @@ def process_video(video_path, model_path, conf_threshold, img_size):
     cap = cv2.VideoCapture(video_path)
     
     st.markdown("### 📡 Live Telemetry Feed")
+    
+    # 1. Create Columns
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+
+    # 2. Create Empty Placeholders inside columns (THIS FIXES THE LAYOUT SHIFT)
+    # We save these variables to write to them later
+    st_kpi1 = kpi1.empty()
+    st_kpi2 = kpi2.empty()
+    st_kpi3 = kpi3.empty()
+    st_kpi4 = kpi4.empty()
     
     col1, col2 = st.columns([2, 1])
     with col1:
         image_spot = st.empty()
-        alert_spot = st.empty() # <--- 1. ALERT PLACEHOLDER
+        alert_spot = st.empty()
     with col2:
         chart_spot_lat = st.empty()
         chart_spot_obj = st.empty()
@@ -128,8 +121,7 @@ def process_video(video_path, model_path, conf_threshold, img_size):
     while cap.isOpened():
         start_time = time.time()
         ret, frame = cap.read()
-        if not ret:
-            break
+        if not ret: break
             
         frame_id += 1
         if frame_id % 3 != 0: continue 
@@ -152,12 +144,13 @@ def process_video(video_path, model_path, conf_threshold, img_size):
         if len(data_buffer) > 50: data_buffer.pop(0)
         df = pd.DataFrame(data_buffer)
 
-        kpi1.metric("System Health", "ONLINE")
-        kpi2.metric("Inference Speed", f"{fps:.1f} FPS")
-        kpi3.metric("Latency", f"{latency_ms:.1f} ms")
-        kpi4.metric("Objects Detected", f"{objects_detected}")
+        # 3. Update the Placeholders (Instead of creating new metrics)
+        st_kpi1.metric("System Health", "ONLINE")
+        st_kpi2.metric("Inference Speed", f"{fps:.1f} FPS")
+        st_kpi3.metric("Latency", f"{latency_ms:.1f} ms")
+        st_kpi4.metric("Objects Detected", f"{objects_detected}")
 
-        # --- 2. ALERTS LOGIC ---
+        # Alerts
         if fps < 10:
             alert_spot.error(f"🔴 CRITICAL: Latency High! ({latency_ms:.0f}ms)")
         elif fps < 20:
@@ -165,11 +158,13 @@ def process_video(video_path, model_path, conf_threshold, img_size):
         else:
             alert_spot.success("🟢 SYSTEM NORMAL")
 
+        # Video
         annotated_frame = results[0].plot()
         annotated_frame = draw_hud(annotated_frame, fps, latency_ms, counts)
         annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
         image_spot.image(annotated_frame, caption=f"Real-Time Inference (Frame {frame_id})", width="stretch")
 
+        # Charts
         if not df.empty:
             fig_lat = px.line(df, x="Frame", y="Latency_ms", title="Latency Stability", height=250)
             fig_lat.update_layout(margin=dict(l=20, r=20, t=30, b=20))
@@ -187,7 +182,7 @@ st.sidebar.header("Deployment Settings")
 
 model_file = "best.onnx"
 if not os.path.exists(model_file):
-    st.error(f"Model file '{model_file}' not found! Please upload it to your GitHub repo.")
+    st.error(f"Model file '{model_file}' not found!")
     st.stop()
 
 conf_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.50, 0.05)
@@ -195,7 +190,6 @@ source_type = st.sidebar.radio("Select Input Source", ["Sample Video", "Upload V
 
 if source_type == "Live Stream (WebRTC)":
     st.markdown("### 📡 Real-Time Camera Stream")
-    st.info("Click 'Start' and allow camera access. Works on Mobile & Desktop.")
     rtc_configuration = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
     webrtc_streamer(
         key="yolo-stream", mode=WebRtcMode.SENDRECV, rtc_configuration=rtc_configuration,
@@ -206,43 +200,24 @@ if source_type == "Live Stream (WebRTC)":
 elif source_type == "Snapshot (Legacy)":
     st.markdown("### 📸 Phone Camera Snapshot")
     camera_image = st.camera_input("Tap to Capture")
-    
     if camera_image:
-        with st.spinner("Processing image... please wait."):
-            try:
-                # Improved Image Loading for Mobile
-                bytes_data = camera_image.getvalue()
-                file_bytes = np.frombuffer(bytes_data, dtype=np.uint8)
-                frame = cv2.imdecode(file_bytes, 1)
-                
-                if frame is None:
-                    st.error("Could not decode image. Please try again.")
-                else:
-                    model = load_model(model_file)
-                    start_time = time.time()
-                    # Process with 640
-                    results, counts = process_frame(frame, model, conf_threshold, 640)
-                    end_time = time.time()
-                    
-                    latency_ms = (end_time - start_time) * 1000
-                    
-                    annotated_frame = results[0].plot()
-                    annotated_frame = draw_hud(annotated_frame, 0, latency_ms, counts)
-                    
-                    # Convert to RGB for display
-                    annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-                    # FIXED: Replaced 'use_container_width=True' with 'width="stretch"'
-                    st.image(annotated_frame, caption="Processed Snapshot", width="stretch")
-                    st.success("Processing Complete!")
-                    
-            except Exception as e:
-                st.error(f"An error occurred during processing: {e}")
+        with st.spinner("Processing..."):
+            bytes_data = camera_image.getvalue()
+            file_bytes = np.frombuffer(bytes_data, dtype=np.uint8)
+            frame = cv2.imdecode(file_bytes, 1)
+            model = load_model(model_file)
+            start_time = time.time()
+            results, counts = process_frame(frame, model, conf_threshold, 640)
+            end_time = time.time()
+            annotated_frame = results[0].plot()
+            annotated_frame = draw_hud(annotated_frame, 0, (end_time - start_time) * 1000, counts)
+            annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+            st.image(annotated_frame, width="stretch")
 
 elif source_type == "Sample Video":
     video_file = "Relaxing Night Drive in Tokyo _ 8K 60fps HDR _ Soft Lofi Beats - Abao Vision (1080p, h264).mp4"
     if st.sidebar.button("🚀 Start Sample"):
         if os.path.exists(video_file):
-            # Process with 640
             process_video(video_file, model_file, conf_threshold, 640)
         else:
             st.warning("Sample video not found.")
@@ -252,5 +227,4 @@ else: # Upload Video
     if uploaded_file and st.sidebar.button("🚀 Start Processing"):
         tfile = tempfile.NamedTemporaryFile(delete=False)
         tfile.write(uploaded_file.read())
-        # Process with 640
         process_video(tfile.name, model_file, conf_threshold, 640)
