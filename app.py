@@ -7,8 +7,8 @@ from ultralytics import YOLO
 import tempfile
 import os
 import numpy as np
-import av  # <--- NEW: Video processing library
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration # <--- NEW: WebRTC
+import av
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
 # ================= CONFIGURATION =================
 st.set_page_config(
@@ -49,22 +49,27 @@ def process_frame(frame, model, conf_threshold, img_size):
     
     return results, len(final_boxes)
 
-# --- WEBRTC CALLBACK FOR REAL-TIME VIDEO ---
-def video_frame_callback(frame):
-    # This function runs for EVERY video frame
-    img = frame.to_ndarray(format="bgr24")
-    
-    # Load model (cached)
-    model = load_model("best.onnx")
-    
-    # Process
-    results, _ = process_frame(img, model, 0.5, 320)
-    
-    # Draw
-    annotated_frame = results[0].plot()
-    
-    # Return back to browser
-    return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
+# --- VIDEO PROCESSOR CLASS (Fixes Threading Issues) ---
+class YOLOVideoProcessor:
+    def recv(self, frame):
+        try:
+            img = frame.to_ndarray(format="bgr24")
+            
+            # Load model (cached, so it's fast)
+            model = load_model("best.onnx")
+            
+            # Process
+            results, _ = process_frame(img, model, 0.5, 320)
+            
+            # Draw
+            annotated_frame = results[0].plot()
+            
+            # Return back to browser
+            return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
+        except Exception as e:
+            # Return original frame if processing fails to prevent crash
+            print(f"Error processing frame: {e}")
+            return frame
 
 def process_video(video_path, model_path, conf_threshold, img_size):
     model = load_model(model_path)
@@ -158,7 +163,7 @@ if source_type == "Live Stream (WebRTC)":
         key="yolo-stream",
         mode=WebRtcMode.SENDRECV,
         rtc_configuration=rtc_configuration,
-        video_frame_callback=video_frame_callback,
+        video_processor_factory=YOLOVideoProcessor,  # Using Class-based processor for stability
         media_stream_constraints={"video": True, "audio": False},
         async_processing=True,
     )
