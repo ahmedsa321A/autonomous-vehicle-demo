@@ -162,10 +162,13 @@ def process_video(video_path, model_path, conf_threshold, img_size):
         annotated_frame = results[0].plot()
         annotated_frame = draw_hud(annotated_frame, fps, latency_ms, counts)
         annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-        image_spot.image(annotated_frame, caption=f"Real-Time Inference (Frame {frame_id})", width="stretch")
+        
+        # Resize to reduce browser load
+        display_frame = cv2.resize(annotated_frame, (640, 360))
+        image_spot.image(display_frame, caption=f"Real-Time Inference (Frame {frame_id})", width="stretch")
 
-        # Charts
-        if not df.empty:
+        # Charts - Update only every 10 frames to fix lag
+        if not df.empty and frame_id % 10 == 0:
             fig_lat = px.line(df, x="Frame", y="Latency_ms", title="Latency Stability", height=250)
             fig_lat.update_layout(margin=dict(l=20, r=20, t=30, b=20))
             chart_spot_lat.plotly_chart(fig_lat, width="stretch", key=f"lat_{frame_id}")
