@@ -32,22 +32,51 @@ def load_model(model_path):
     return YOLO(model_path, task='detect')
 
 def process_frame(frame, model, conf_threshold, img_size):
-    """Run inference on a single frame (Shared by Video and Camera)"""
+    """Run inference and return results + object counts"""
     # 1. Inference
-    results = model(frame, conf=conf_threshold, device='cpu', verbose=False)
+    results = model(frame, imgsz=img_size, conf=conf_threshold, device='cpu', verbose=False)
     
-    # 2. Filter
+    # 2. Filter & Count
     final_boxes = []
+    counts = {}
+    
     if len(results) > 0:
         for box in results[0].boxes:
             cls_id = int(box.cls[0])
             conf = float(box.conf[0])
             threshold = CLASS_RULES.get(cls_id, DEFAULT_CONF)
+            
             if conf >= threshold:
                 final_boxes.append(box)
+                # Add to counts
+                class_name = model.names[cls_id]
+                counts[class_name] = counts.get(class_name, 0) + 1
+                
         results[0].boxes = final_boxes
     
-    return results, len(final_boxes)
+    return results, counts
+
+def draw_hud(frame, fps, latency_ms, counts):
+    """Draw stats and class breakdown on the frame"""
+    total_obj = sum(counts.values())
+    
+    # Line 1: Technical Stats
+    stats_text = f"FPS: {fps:.1f} | Latency: {latency_ms:.1f}ms | Total: {total_obj}"
+    
+    # Line 2: Object Breakdown (e.g., "car: 3 | person: 1")
+    breakdown_text = " | ".join([f"{k}: {v}" for k, v in counts.items()])
+    
+    # Draw Black Background
+    # Height adjusts if we have a second line of text
+    h_bg = 70 if breakdown_text else 40
+    cv2.rectangle(frame, (0, 0), (650, h_bg), (0, 0, 0), -1)
+    
+    # Draw Text (Green for stats, Yellow for objects)
+    cv2.putText(frame, stats_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    if breakdown_text:
+        cv2.putText(frame, breakdown_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        
+    return frame
 
 # --- VIDEO PROCESSOR CLASS (Fixes Threading Issues) ---
 class YOLOVideoProcessor:
@@ -62,9 +91,9 @@ class YOLOVideoProcessor:
             img = frame.to_ndarray(format="bgr24")
             
             # Process
-            results, obj_count = process_frame(img, self.model, 0.5, 320)
+            results, counts = process_frame(img, self.model, 0.5, 320)
             
-            # Draw
+            # Draw Boxes
             annotated_frame = results[0].plot()
             
             # --- CALCULATE STATS ---
@@ -75,20 +104,12 @@ class YOLOVideoProcessor:
             latency_ms = inference_time * 1000
             self.last_time = end_time
 
-            # --- DRAW STATS ON FRAME (HUD) ---
-            # This burns the numbers into the video so you can see them on phone/browser
-            stats_text = f"FPS: {fps:.1f} | Latency: {latency_ms:.1f}ms | Objs: {obj_count}"
-            
-            # Black background for text readability
-            cv2.rectangle(annotated_frame, (0, 0), (550, 40), (0, 0, 0), -1)
-            # Green Text
-            cv2.putText(annotated_frame, stats_text, (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            # --- DRAW HUD ---
+            annotated_frame = draw_hud(annotated_frame, fps, latency_ms, counts)
 
             # Return back to browser
             return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
         except Exception as e:
-            # Return original frame if processing fails to prevent crash
             print(f"Error processing frame: {e}")
             return frame
 
@@ -119,7 +140,8 @@ def process_video(video_path, model_path, conf_threshold, img_size):
         if frame_id % 3 != 0: continue # Skip frames for speed
 
         # Run shared processing logic
-        results, objects_detected = process_frame(frame, model, conf_threshold, img_size)
+        results, counts = process_frame(frame, model, conf_threshold, img_size)
+        objects_detected = sum(counts.values())
 
         # Stats
         end_time = time.time()
@@ -144,7 +166,10 @@ def process_video(video_path, model_path, conf_threshold, img_size):
         kpi3.metric("Latency", f"{latency_ms:.1f} ms")
         kpi4.metric("Objects Detected", f"{objects_detected}")
 
+        # Draw HUD on frame
         annotated_frame = results[0].plot()
+        annotated_frame = draw_hud(annotated_frame, fps, latency_ms, counts)
+        
         annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
         image_spot.image(annotated_frame, caption=f"Real-Time Inference (Frame {frame_id})", use_container_width=True)
 
@@ -198,9 +223,19 @@ elif source_type == "Snapshot (Legacy)":
     if camera_image:
         file_bytes = np.asarray(bytearray(camera_image.read()), dtype=np.uint8)
         frame = cv2.imdecode(file_bytes, 1)
+        
         model = load_model(model_file)
-        results, objects_detected = process_frame(frame, model, conf_threshold, 320)
-        st.image(results[0].plot(), caption="Processed Snapshot", channels="BGR", use_container_width=True)
+        start_time = time.time()
+        results, counts = process_frame(frame, model, conf_threshold, 320)
+        end_time = time.time()
+        
+        latency_ms = (end_time - start_time) * 1000
+        fps = 0 # Snapshot doesn't have meaningful FPS
+        
+        annotated_frame = results[0].plot()
+        annotated_frame = draw_hud(annotated_frame, fps, latency_ms, counts)
+        
+        st.image(annotated_frame, caption="Processed Snapshot", channels="BGR", use_container_width=True)
 
 elif source_type == "Sample Video":
     video_file = "Relaxing Night Drive in Tokyo _ 8K 60fps HDR _ Soft Lofi Beats - Abao Vision (1080p, h264).mp4"
