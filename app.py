@@ -34,7 +34,7 @@ def load_model(model_path):
 def process_frame(frame, model, conf_threshold, img_size):
     """Run inference on a single frame (Shared by Video and Camera)"""
     # 1. Inference
-    results = model(frame, conf=0.1, device='cpu', verbose=False)
+    results = model(frame, imgsz=img_size, conf=0.1, device='cpu', verbose=False)
     
     # 2. Filter
     final_boxes = []
@@ -51,19 +51,38 @@ def process_frame(frame, model, conf_threshold, img_size):
 
 # --- VIDEO PROCESSOR CLASS (Fixes Threading Issues) ---
 class YOLOVideoProcessor:
+    def __init__(self):
+        # Initialize model and timers
+        self.model = load_model("best.onnx")
+        self.last_time = time.time()
+
     def recv(self, frame):
         try:
+            start_time = time.time()
             img = frame.to_ndarray(format="bgr24")
             
-            # Load model (cached, so it's fast)
-            model = load_model("best.onnx")
-            
             # Process
-            results, _ = process_frame(img, model, 0.5, 320)
+            results, obj_count = process_frame(img, self.model, 0.5, 320)
             
             # Draw
             annotated_frame = results[0].plot()
             
+            # --- CALCULATE STATS ---
+            end_time = time.time()
+            inference_time = end_time - start_time
+            total_time = end_time - self.last_time
+            fps = 1 / total_time if total_time > 0 else 0
+            latency_ms = inference_time * 1000
+            self.last_time = end_time
+
+            # --- DRAW STATS ON FRAME ---
+            stats_text = f"FPS: {fps:.1f} | Latency: {latency_ms:.1f}ms | Objects: {obj_count}"
+            # Draw black background for text
+            cv2.rectangle(annotated_frame, (5, 5), (600, 40), (0, 0, 0), -1)
+            # Draw green text
+            cv2.putText(annotated_frame, stats_text, (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
             # Return back to browser
             return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
         except Exception as e:
