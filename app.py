@@ -6,6 +6,7 @@ import plotly.express as px
 from ultralytics import YOLO
 import tempfile
 import os
+import numpy as np  # <--- NEW: Needed for camera image conversion
 
 # ================= CONFIGURATION =================
 st.set_page_config(
@@ -14,7 +15,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- THE BAN LIST (Same as before) ---
+# --- THE BAN LIST ---
 CLASS_RULES = {
     1: 0.30, 2: 0.50, 3: 0.50, 11: 0.30, 12: 0.30, 13: 0.30, 
     14: 0.40, 15: 0.20, 16: 0.50, 17: 0.50,
@@ -28,15 +29,32 @@ def load_model(model_path):
     """Load model once and cache it to save memory"""
     return YOLO(model_path, task='detect')
 
+def process_frame(frame, model, conf_threshold, img_size):
+    """Run inference on a single frame (Shared by Video and Camera)"""
+    # 1. Inference
+    results = model(frame, imgsz=img_size, conf=0.1, device='cpu', verbose=False)
+    
+    # 2. Filter
+    final_boxes = []
+    if len(results) > 0:
+        for box in results[0].boxes:
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            threshold = CLASS_RULES.get(cls_id, DEFAULT_CONF)
+            if conf >= threshold:
+                final_boxes.append(box)
+        results[0].boxes = final_boxes
+    
+    return results, len(final_boxes)
+
 def process_video(video_path, model_path, conf_threshold, img_size):
     model = load_model(model_path)
     cap = cv2.VideoCapture(video_path)
     
-    # Dashboard Layout Containers
     st.markdown("### 📡 Live Telemetry Feed")
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     
-    col1, col2 = st.columns([2, 1]) # Video gets 2/3 width
+    col1, col2 = st.columns([2, 1])
     with col1:
         image_spot = st.empty()
     with col2:
@@ -53,34 +71,18 @@ def process_video(video_path, model_path, conf_threshold, img_size):
             break
             
         frame_id += 1
-        
-        # Optimization: Skip frames if video is high FPS to keep UI responsive
-        if frame_id % 3 != 0: 
-            continue
+        if frame_id % 3 != 0: continue # Skip frames for speed
 
-        # 1. Inference
-        # Force CPU for Cloud Compatibility
-        results = model(frame, imgsz=img_size, conf=0.1, device='cpu', verbose=False)
-        
-        # 2. Filter
-        final_boxes = []
-        if len(results) > 0:
-            for box in results[0].boxes:
-                cls_id = int(box.cls[0])
-                conf = float(box.conf[0])
-                threshold = CLASS_RULES.get(cls_id, DEFAULT_CONF)
-                if conf >= threshold:
-                    final_boxes.append(box)
-            results[0].boxes = final_boxes
+        # Run shared processing logic
+        results, objects_detected = process_frame(frame, model, conf_threshold, img_size)
 
-        # 3. Stats
+        # Stats
         end_time = time.time()
         inference_time = end_time - start_time
         fps = 1 / inference_time if inference_time > 0 else 0
         latency_ms = inference_time * 1000
-        objects_detected = len(final_boxes)
 
-        # 4. Update Data
+        # Update Data
         data_buffer.append({
             "Frame": frame_id,
             "FPS": round(fps, 1),
@@ -88,24 +90,19 @@ def process_video(video_path, model_path, conf_threshold, img_size):
             "Objects": objects_detected
         })
         
-        # Keep buffer small for speed
-        if len(data_buffer) > 50: 
-            data_buffer.pop(0)
+        if len(data_buffer) > 50: data_buffer.pop(0)
         df = pd.DataFrame(data_buffer)
 
-        # 5. Update UI (Real-time)
+        # UI Updates
         kpi1.metric("System Health", "ONLINE")
         kpi2.metric("Inference Speed", f"{fps:.1f} FPS")
         kpi3.metric("Latency", f"{latency_ms:.1f} ms")
         kpi4.metric("Objects Detected", f"{objects_detected}")
 
-        # Draw Video
         annotated_frame = results[0].plot()
-        # Convert BGR to RGB for Streamlit
         annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
         image_spot.image(annotated_frame, caption=f"Real-Time Inference (Frame {frame_id})", use_container_width=True)
 
-        # Draw Charts
         if not df.empty:
             fig_lat = px.line(df, x="Frame", y="Latency_ms", title="Latency Stability", height=250)
             fig_lat.update_layout(margin=dict(l=20, r=20, t=30, b=20))
@@ -121,34 +118,58 @@ def process_video(video_path, model_path, conf_threshold, img_size):
 st.title("🚗 Autonomous Vehicle MLOps Platform")
 st.sidebar.header("Deployment Settings")
 
-# 1. Model Selection
 model_file = "best.onnx"
 if not os.path.exists(model_file):
     st.error(f"Model file '{model_file}' not found! Please upload it to your GitHub repo.")
     st.stop()
 
-# 2. Input Source
-source_type = st.sidebar.radio("Select Input Source", ["Sample Video", "Upload Video"])
+# 1. Source Selection
+source_type = st.sidebar.radio("Select Input Source", ["Sample Video", "Upload Video", "Live Camera (Phone/Webcam)"])
 
-if source_type == "Sample Video":
-    video_file = "Relaxing Night Drive in Tokyo _ 8K 60fps HDR _ Soft Lofi Beats - Abao Vision (1080p, h264).mp4" 
-    if not os.path.exists(video_file):
-        st.warning("Sample video not found in repository.")
-        video_file = None
-else:
+if source_type == "Live Camera (Phone/Webcam)":
+    st.markdown("### 📸 Phone Camera Test Mode")
+    st.info("Use your phone to take a snapshot of the road or traffic.")
+    
+    # Streamlit Camera Input (Works on Cloud)
+    camera_image = st.camera_input("Tap to Capture")
+    
+    if camera_image:
+        # Convert uploaded image to OpenCV format
+        file_bytes = np.asarray(bytearray(camera_image.read()), dtype=np.uint8)
+        frame = cv2.imdecode(file_bytes, 1)
+        
+        # Load Model
+        model = load_model(model_file)
+        
+        # Run Inference
+        start_time = time.time()
+        results, objects_detected = process_frame(frame, model, 0.5, 320)
+        end_time = time.time()
+        
+        # Show Results
+        latency_ms = (end_time - start_time) * 1000
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Latency", f"{latency_ms:.1f} ms")
+        with col2:
+            st.metric("Objects Detected", f"{objects_detected}")
+            
+        annotated_frame = results[0].plot()
+        annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+        st.image(annotated_frame, caption="Processed Snapshot", use_container_width=True)
+
+elif source_type == "Sample Video":
+    video_file = "Relaxing Night Drive in Tokyo _ 8K 60fps HDR _ Soft Lofi Beats - Abao Vision (1080p, h264).mp4"
+    if st.sidebar.button("🚀 Start Sample"):
+        if os.path.exists(video_file):
+            process_video(video_file, model_file, 0.5, 320)
+        else:
+            st.warning("Sample video not found.")
+
+else: # Upload Video
     uploaded_file = st.sidebar.file_uploader("Upload a driving video", type=['mp4', 'mov', 'avi'])
-    if uploaded_file is not None:
+    if uploaded_file and st.sidebar.button("🚀 Start Processing"):
         tfile = tempfile.NamedTemporaryFile(delete=False)
         tfile.write(uploaded_file.read())
-        video_file = tfile.name
-    else:
-        video_file = None
-
-# 3. Start Button
-if st.sidebar.button("🚀 Start Deployment Test"):
-    if video_file:
-        process_video(video_file, model_file, 0.5, 320)
-    else:
-        st.error("Please select or upload a video first.")
-else:
-    st.info("👈 Select settings in the sidebar and click 'Start Deployment Test'")
+        process_video(tfile.name, model_file, 0.5, 320)
