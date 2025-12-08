@@ -97,11 +97,7 @@ def process_video(video_path, model_path, conf_threshold, img_size):
     
     st.markdown("### 📡 Live Telemetry Feed")
     
-    # 1. Create Columns
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-
-    # 2. Create Empty Placeholders inside columns (THIS FIXES THE LAYOUT SHIFT)
-    # We save these variables to write to them later
     st_kpi1 = kpi1.empty()
     st_kpi2 = kpi2.empty()
     st_kpi3 = kpi3.empty()
@@ -144,13 +140,12 @@ def process_video(video_path, model_path, conf_threshold, img_size):
         if len(data_buffer) > 50: data_buffer.pop(0)
         df = pd.DataFrame(data_buffer)
 
-        # 3. Update the Placeholders (Instead of creating new metrics)
+        # Update Metrics
         st_kpi1.metric("System Health", "ONLINE")
         st_kpi2.metric("Inference Speed", f"{fps:.1f} FPS")
         st_kpi3.metric("Latency", f"{latency_ms:.1f} ms")
         st_kpi4.metric("Objects Detected", f"{objects_detected}")
 
-        # Alerts
         if fps < 10:
             alert_spot.error(f"🔴 CRITICAL: Latency High! ({latency_ms:.0f}ms)")
         elif fps < 20:
@@ -158,16 +153,17 @@ def process_video(video_path, model_path, conf_threshold, img_size):
         else:
             alert_spot.success("🟢 SYSTEM NORMAL")
 
-        # Video
+        # --- VIDEO RENDERING FIX ---
         annotated_frame = results[0].plot()
         annotated_frame = draw_hud(annotated_frame, fps, latency_ms, counts)
         annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-        
-        # Resize to reduce browser load
         display_frame = cv2.resize(annotated_frame, (640, 360))
-        image_spot.image(display_frame, caption=f"Real-Time Inference (Frame {frame_id})", width="stretch")
+        
+        # COMPRESS TO JPEG BEFORE SENDING (Reduces lag significantly)
+        _, jpeg_frame = cv2.imencode('.jpg', display_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+        image_spot.image(jpeg_frame.tobytes(), caption=f"Real-Time Inference (Frame {frame_id})", width="stretch")
 
-        # Charts - Update only every 10 frames to fix lag
+        # Update Charts (Only every 10 frames to save CPU)
         if not df.empty and frame_id % 10 == 0:
             fig_lat = px.line(df, x="Frame", y="Latency_ms", title="Latency Stability", height=250)
             fig_lat.update_layout(margin=dict(l=20, r=20, t=30, b=20))
@@ -176,6 +172,9 @@ def process_video(video_path, model_path, conf_threshold, img_size):
             fig_obj = px.bar(df, x="Frame", y="Objects", title="Object Density", height=250)
             fig_obj.update_layout(margin=dict(l=20, r=20, t=30, b=20))
             chart_spot_obj.plotly_chart(fig_obj, width="stretch", key=f"obj_{frame_id}")
+        
+        # Tiny sleep to let Streamlit catch up
+        time.sleep(0.01)
 
     cap.release()
 
